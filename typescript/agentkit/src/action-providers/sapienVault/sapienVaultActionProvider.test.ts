@@ -91,6 +91,7 @@ describe("SapienVault Action Provider", () => {
       readContract: mockReadContract,
     } as unknown as jest.Mocked<EvmWalletProvider>;
 
+    mockApprove.mockClear();
     mockApprove.mockResolvedValue("Approval successful");
   });
 
