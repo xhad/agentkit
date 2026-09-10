@@ -555,6 +555,27 @@ const agent = createAgent({
 </table>
 </details>
 <details>
+<summary><strong>Sapien Vault</strong></summary>
+<table width="100%">
+<tr>
+    <td width="200"><code>deposit</code></td>
+    <td width="768">Approves SAPIEN if needed and deposits into the Sapien Vault (vSAPIEN) on Base mainnet.</td>
+</tr>
+<tr>
+    <td width="200"><code>withdraw</code></td>
+    <td width="768">Withdraws SAPIEN from the Sapien Vault by asset amount (ERC-4626 withdraw).</td>
+</tr>
+<tr>
+    <td width="200"><code>redeem</code></td>
+    <td width="768">Redeems vSAPIEN shares from the Sapien Vault for SAPIEN (ERC-4626 redeem).</td>
+</tr>
+<tr>
+    <td width="200"><code>get_position</code></td>
+    <td width="768">Reads vSAPIEN shares and SAPIEN asset TVL. Excludes RewardsController inventory from user TVL.</td>
+</tr>
+</table>
+</details>
+<details>
 <summary><strong>Superfluid</strong></summary>
 <table width="100%">
 <tr>
