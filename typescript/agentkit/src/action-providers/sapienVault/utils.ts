@@ -111,3 +111,51 @@ export async function readSapienShareDecimals(wallet: EvmWalletProvider): Promis
   });
   return Number(decimals);
 }
+
+/**
+ * Normalizes getStakeAccount's return value to a locked-amount bigint.
+ *
+ * @param stake - Tuple or struct from getStakeAccount.
+ * @returns The locked amount in asset terms.
+ */
+export function parseLockedAmount(stake: unknown): bigint {
+  if (stake && typeof stake === "object" && !Array.isArray(stake) && "lockedAmount" in stake) {
+    return (stake as { lockedAmount: bigint }).lockedAmount;
+  }
+  if (Array.isArray(stake) && typeof stake[0] === "bigint") {
+    return stake[0];
+  }
+  throw new Error("Unexpected getStakeAccount return value");
+}
+
+/**
+ * Normalizes depositAgeStatus's four return values.
+ *
+ * @param status - Named struct or positional tuple from depositAgeStatus.
+ * @returns Matured/pending shares, minAge, and seconds until next maturity.
+ */
+export function parseDepositAgeStatus(status: unknown): {
+  matured: bigint;
+  pending: bigint;
+  minAge: bigint;
+  nextMaturityRemaining: bigint;
+} {
+  if (status && typeof status === "object" && !Array.isArray(status) && "matured" in status) {
+    const named = status as {
+      matured: bigint;
+      pending: bigint;
+      minAge: bigint;
+      nextMaturityRemaining: bigint;
+    };
+    return named;
+  }
+  if (Array.isArray(status) && status.length >= 4) {
+    return {
+      matured: status[0] as bigint,
+      pending: status[1] as bigint,
+      minAge: status[2] as bigint,
+      nextMaturityRemaining: status[3] as bigint,
+    };
+  }
+  throw new Error("Unexpected depositAgeStatus return value");
+}

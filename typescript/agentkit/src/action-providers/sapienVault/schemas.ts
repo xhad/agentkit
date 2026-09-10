@@ -45,7 +45,7 @@ export const SapienVaultRedeemSchema = z
   .describe("Input schema for Sapien Vault redeem action");
 
 /**
- * Input schema for Sapien Vault position read.
+ * Input schema for Sapien Vault position / tranche read.
  */
 export const SapienVaultGetPositionSchema = z
   .object({
@@ -54,3 +54,22 @@ export const SapienVaultGetPositionSchema = z
     ),
   })
   .describe("Input schema for Sapien Vault position read");
+
+/**
+ * Input schema for Sapien Vault totals read (no parameters).
+ */
+export const SapienVaultGetVaultTotalsSchema = z
+  .object({})
+  .describe("Input schema for Sapien Vault totals read");
+
+/**
+ * Input schema for transferring vSAPIEN shares.
+ */
+export const SapienVaultTransferSchema = z
+  .object({
+    destination: EthereumAddressSchema.describe("The address that will receive vSAPIEN shares"),
+    shares: WholeAmountSchema.describe(
+      "The quantity of vSAPIEN shares to transfer, in whole units",
+    ),
+  })
+  .describe("Input schema for Sapien Vault share transfer");

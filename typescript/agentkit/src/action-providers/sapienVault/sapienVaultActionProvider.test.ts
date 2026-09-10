@@ -3,16 +3,13 @@ import { EvmWalletProvider } from "../../wallet-providers";
 import { approve } from "../../utils";
 import { Network } from "../../network";
 import { SapienVaultActionProvider } from "./sapienVaultActionProvider";
-import {
-  SAPIEN_REWARDS_CONTROLLER_ADDRESS,
-  SAPIEN_TOKEN_ADDRESS,
-  SAPIEN_VAULT_ABI,
-  SAPIEN_VAULT_ADDRESS,
-} from "./constants";
+import { SAPIEN_TOKEN_ADDRESS, SAPIEN_VAULT_ABI, SAPIEN_VAULT_ADDRESS } from "./constants";
 import {
   SapienVaultDepositSchema,
   SapienVaultGetPositionSchema,
+  SapienVaultGetVaultTotalsSchema,
   SapienVaultRedeemSchema,
+  SapienVaultTransferSchema,
   SapienVaultWithdrawSchema,
 } from "./schemas";
 
@@ -26,8 +23,14 @@ const MOCK_WHOLE_ASSETS = "1.0";
 const MOCK_WHOLE_SHARES = "1.0";
 const MOCK_USER_SHARES = parseUnits("1.5", MOCK_SHARE_DECIMALS);
 const MOCK_USER_ASSETS = parseUnits("1.52", MOCK_TOKEN_DECIMALS);
-const MOCK_RC_SHARES = parseUnits("1000", MOCK_SHARE_DECIMALS);
-const MOCK_RC_ASSETS = parseUnits("1010", MOCK_TOKEN_DECIMALS);
+const MOCK_MATURED_SHARES = parseUnits("1.2", MOCK_SHARE_DECIMALS);
+const MOCK_PENDING_SHARES = parseUnits("0.3", MOCK_SHARE_DECIMALS);
+const MOCK_AVAILABLE_ASSETS = parseUnits("1.2", MOCK_TOKEN_DECIMALS);
+const MOCK_LOCKED_ASSETS = parseUnits("0.1", MOCK_TOKEN_DECIMALS);
+const MOCK_TOTAL_ASSETS = parseUnits("10000", MOCK_TOKEN_DECIMALS);
+const MOCK_TOTAL_SHARES = parseUnits("9900", MOCK_SHARE_DECIMALS);
+const MOCK_MIN_AGE = 86400n;
+const MOCK_NEXT_MATURITY = 3600n;
 const MOCK_MAX_DEPOSIT = parseUnits("1000000", MOCK_TOKEN_DECIMALS);
 const MOCK_PREVIEW_SHARES = parseUnits("0.99", MOCK_SHARE_DECIMALS);
 const MOCK_MAX_WITHDRAW = parseUnits("10", MOCK_TOKEN_DECIMALS);
@@ -43,7 +46,7 @@ describe("SapienVault Action Provider", () => {
   const mockReadContract = jest.fn();
 
   beforeEach(() => {
-    mockReadContract.mockImplementation(({ address, functionName, args }) => {
+    mockReadContract.mockImplementation(({ address, functionName }) => {
       if (functionName === "decimals") {
         return address === SAPIEN_VAULT_ADDRESS ? MOCK_SHARE_DECIMALS : MOCK_TOKEN_DECIMALS;
       }
@@ -63,18 +66,34 @@ describe("SapienVault Action Provider", () => {
         return MOCK_MAX_REDEEM;
       }
       if (functionName === "balanceOf") {
-        const account = (args?.[0] as string)?.toLowerCase();
-        if (account === SAPIEN_REWARDS_CONTROLLER_ADDRESS.toLowerCase()) {
-          return MOCK_RC_SHARES;
-        }
         return MOCK_USER_SHARES;
       }
-      if (functionName === "convertToAssets") {
-        const shares = args?.[0] as bigint;
-        if (shares === MOCK_RC_SHARES) {
-          return MOCK_RC_ASSETS;
-        }
+      if (functionName === "assetsOf") {
         return MOCK_USER_ASSETS;
+      }
+      if (functionName === "convertToAssets") {
+        return MOCK_USER_ASSETS;
+      }
+      if (functionName === "maturedShares") {
+        return MOCK_MATURED_SHARES;
+      }
+      if (functionName === "pendingShares") {
+        return MOCK_PENDING_SHARES;
+      }
+      if (functionName === "availableBalance") {
+        return MOCK_AVAILABLE_ASSETS;
+      }
+      if (functionName === "getStakeAccount") {
+        return { lockedAmount: MOCK_LOCKED_ASSETS };
+      }
+      if (functionName === "depositAgeStatus") {
+        return [MOCK_MATURED_SHARES, MOCK_PENDING_SHARES, MOCK_MIN_AGE, MOCK_NEXT_MATURITY];
+      }
+      if (functionName === "totalAssets") {
+        return MOCK_TOTAL_ASSETS;
+      }
+      if (functionName === "totalSupply") {
+        return MOCK_TOTAL_SHARES;
       }
       throw new Error(`Unexpected readContract call: ${functionName}`);
     });
@@ -112,6 +131,34 @@ describe("SapienVault Action Provider", () => {
 
     it("should parse an empty get_position payload", () => {
       expect(SapienVaultGetPositionSchema.safeParse({}).success).toBe(true);
+    });
+
+    it("should parse vault totals and transfer inputs", () => {
+      expect(SapienVaultGetVaultTotalsSchema.safeParse({}).success).toBe(true);
+      expect(
+        SapienVaultTransferSchema.safeParse({
+          destination: MOCK_RECEIVER,
+          shares: "1",
+        }).success,
+      ).toBe(true);
+      expect(SapienVaultTransferSchema.safeParse({ destination: "bad", shares: "1" }).success).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("exposed actions", () => {
+    it("should not expose a standalone approve action", () => {
+      const names = actionProvider.getActions(mockWallet).map(action => action.name);
+      expect(names).toEqual([
+        "SapienVaultActionProvider_deposit",
+        "SapienVaultActionProvider_withdraw",
+        "SapienVaultActionProvider_redeem",
+        "SapienVaultActionProvider_transfer",
+        "SapienVaultActionProvider_get_position",
+        "SapienVaultActionProvider_get_vault_totals",
+      ]);
+      expect(names.some(name => name.endsWith("_approve") || name === "approve")).toBe(false);
     });
   });
 
@@ -292,18 +339,153 @@ describe("SapienVault Action Provider", () => {
     });
   });
 
+  describe("transfer", () => {
+    it("should transfer matured vSAPIEN shares", async () => {
+      const atomicShares = parseUnits("0.5", MOCK_SHARE_DECIMALS);
+      mockReadContract.mockImplementation(({ address, functionName }) => {
+        if (functionName === "decimals") {
+          return address === SAPIEN_VAULT_ADDRESS ? MOCK_SHARE_DECIMALS : MOCK_TOKEN_DECIMALS;
+        }
+        if (functionName === "maturedShares") {
+          return MOCK_MATURED_SHARES;
+        }
+        if (functionName === "availableBalance") {
+          return MOCK_AVAILABLE_ASSETS;
+        }
+        if (functionName === "getStakeAccount") {
+          return { lockedAmount: MOCK_LOCKED_ASSETS };
+        }
+        if (functionName === "convertToAssets") {
+          return parseUnits("0.5", MOCK_TOKEN_DECIMALS);
+        }
+        throw new Error(`Unexpected readContract call: ${functionName}`);
+      });
+
+      const response = await actionProvider.transfer(mockWallet, {
+        destination: MOCK_RECEIVER,
+        shares: "0.5",
+      });
+
+      expect(mockWallet.sendTransaction).toHaveBeenCalledWith({
+        to: SAPIEN_VAULT_ADDRESS,
+        data: encodeFunctionData({
+          abi: SAPIEN_VAULT_ABI,
+          functionName: "transfer",
+          args: [MOCK_RECEIVER, atomicShares],
+        }),
+      });
+      expect(response).toContain("Transferred 0.5 vSAPIEN");
+      expect(response).toContain(MOCK_RECEIVER);
+      expect(response).toContain(MOCK_TX_HASH);
+    });
+
+    it("should reject transfers above matured shares", async () => {
+      mockReadContract.mockImplementation(({ address, functionName }) => {
+        if (functionName === "decimals") {
+          return address === SAPIEN_VAULT_ADDRESS ? MOCK_SHARE_DECIMALS : MOCK_TOKEN_DECIMALS;
+        }
+        if (functionName === "maturedShares") {
+          return 0n;
+        }
+        if (functionName === "availableBalance") {
+          return 0n;
+        }
+        if (functionName === "getStakeAccount") {
+          return { lockedAmount: 0n };
+        }
+        throw new Error(`Unexpected readContract call: ${functionName}`);
+      });
+
+      const response = await actionProvider.transfer(mockWallet, {
+        destination: MOCK_RECEIVER,
+        shares: MOCK_WHOLE_SHARES,
+      });
+      expect(response).toContain("exceeds matured shares");
+      expect(mockWallet.sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it("should reject transfers that exceed available unlocked balance", async () => {
+      mockReadContract.mockImplementation(({ address, functionName }) => {
+        if (functionName === "decimals") {
+          return address === SAPIEN_VAULT_ADDRESS ? MOCK_SHARE_DECIMALS : MOCK_TOKEN_DECIMALS;
+        }
+        if (functionName === "maturedShares") {
+          return MOCK_MATURED_SHARES;
+        }
+        if (functionName === "availableBalance") {
+          return 0n;
+        }
+        if (functionName === "getStakeAccount") {
+          return { lockedAmount: MOCK_LOCKED_ASSETS };
+        }
+        if (functionName === "convertToAssets") {
+          return parseUnits("0.5", MOCK_TOKEN_DECIMALS);
+        }
+        throw new Error(`Unexpected readContract call: ${functionName}`);
+      });
+
+      const response = await actionProvider.transfer(mockWallet, {
+        destination: MOCK_RECEIVER,
+        shares: "0.5",
+      });
+      expect(response).toContain("exceeds available");
+      expect(response).toContain("Locked stake");
+      expect(mockWallet.sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it("should reject transferring to the vault contract", async () => {
+      const response = await actionProvider.transfer(mockWallet, {
+        destination: SAPIEN_VAULT_ADDRESS,
+        shares: "0.5",
+      });
+      expect(response).toContain("Do not transfer vSAPIEN to the vault contract");
+      expect(mockWallet.sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it("should handle transfer errors", async () => {
+      mockReadContract.mockImplementation(({ address, functionName }) => {
+        if (functionName === "decimals") {
+          return address === SAPIEN_VAULT_ADDRESS ? MOCK_SHARE_DECIMALS : MOCK_TOKEN_DECIMALS;
+        }
+        if (functionName === "maturedShares") {
+          return MOCK_MATURED_SHARES;
+        }
+        if (functionName === "availableBalance") {
+          return MOCK_AVAILABLE_ASSETS;
+        }
+        if (functionName === "getStakeAccount") {
+          return { lockedAmount: MOCK_LOCKED_ASSETS };
+        }
+        if (functionName === "convertToAssets") {
+          return parseUnits("0.5", MOCK_TOKEN_DECIMALS);
+        }
+        throw new Error(`Unexpected readContract call: ${functionName}`);
+      });
+      mockWallet.sendTransaction.mockRejectedValue(new Error("TransferExceedsUnlockedShares"));
+
+      const response = await actionProvider.transfer(mockWallet, {
+        destination: MOCK_RECEIVER,
+        shares: "0.5",
+      });
+      expect(response).toContain("Error transferring vSAPIEN");
+      expect(response).toContain("TransferExceedsUnlockedShares");
+    });
+  });
+
   describe("get_position", () => {
-    it("should return shares and assets and exclude RewardsController from user TVL", async () => {
+    it("should return shares, assets, and tranche state", async () => {
       const response = await actionProvider.getPosition(mockWallet, {});
 
       expect(response).toContain(MOCK_OWNER);
       expect(response).toContain("1.5");
       expect(response).toContain("1.52");
-      expect(response).toContain("user TVL");
-      expect(response).toContain(SAPIEN_REWARDS_CONTROLLER_ADDRESS);
-      expect(response).toContain("excludes RewardsController");
-      expect(response).toContain("1010");
-      expect(response).not.toMatch(/SAPIEN assets \(user TVL\): 1010/);
+      expect(response).toContain("matured shares");
+      expect(response).toContain("pending shares");
+      expect(response).toContain("locked stake");
+      expect(response).toContain("available balance");
+      expect(response).toContain("86400");
+      expect(response).toContain("3600");
+      expect(response).not.toMatch(/RewardsController/i);
     });
 
     it("should read a specified address", async () => {
@@ -315,6 +497,24 @@ describe("SapienVault Action Provider", () => {
       mockReadContract.mockRejectedValue(new Error("rpc down"));
       const response = await actionProvider.getPosition(mockWallet, {});
       expect(response).toContain("Error reading Sapien Vault position: Error: rpc down");
+    });
+  });
+
+  describe("get_vault_totals", () => {
+    it("should return totalAssets and total shares", async () => {
+      const response = await actionProvider.getVaultTotals(mockWallet, {});
+
+      expect(response).toContain("totalAssets");
+      expect(response).toContain("10000");
+      expect(response).toContain("total shares (totalSupply)");
+      expect(response).toContain("9900");
+      expect(response).toContain(SAPIEN_VAULT_ADDRESS);
+    });
+
+    it("should handle read errors", async () => {
+      mockReadContract.mockRejectedValue(new Error("rpc down"));
+      const response = await actionProvider.getVaultTotals(mockWallet, {});
+      expect(response).toContain("Error reading Sapien Vault totals: Error: rpc down");
     });
   });
 
